@@ -8,11 +8,13 @@ app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
+// Watchman (Cron Job) ke liye route
+app.get('/', (req, res) => res.send('Backend is Awake!'));
+
 const rooms = {}; 
-const words = ["Laptop", "Pizza", "Guitar", "Mountain", "Candle", "Robot", "Elephant", "Sunglasses", "Burger", "Rocket"];
+const words = ["Laptop", "Pizza", "Guitar", "Mountain", "Candle", "Robot", "Elephant", "Sunglasses", "Burger", "Rocket", "Banana", "Doctor", "Diamond", "Ocean"];
 
 io.on('connection', (socket) => {
-  // Join Room with Duplicate Check
   socket.on('join_room', ({ roomId, username }) => {
     socket.join(roomId);
     if (!rooms[roomId]) {
@@ -27,11 +29,13 @@ io.on('connection', (socket) => {
     const room = rooms[roomId];
     if (room && room.players.length >= 2) {
       room.isStarted = true;
+      room.round = 1;
+      room.players.forEach(p => p.score = 0); // Reset scores if playing again
+      io.to(roomId).emit('player_joined', room.players);
       prepareNewRound(roomId);
     }
   });
 
-  // Drawer ko 3 options dena
   function prepareNewRound(roomId) {
     const room = rooms[roomId];
     if (!room) return;
@@ -50,7 +54,6 @@ io.on('connection', (socket) => {
     io.to(room.currentDrawer).emit('get_word_choices', choices);
   }
 
-  // Jab drawer word select kare tab timer shuru
   socket.on('word_chosen', ({ roomId, word }) => {
     const room = rooms[roomId];
     if (!room) return;
@@ -63,7 +66,6 @@ io.on('connection', (socket) => {
       room.timeLeft--;
       io.to(roomId).emit('timer_update', room.timeLeft);
       
-      // Hint Logic: 30s par pehla letter reveal karo
       if (room.timeLeft === 30) {
         let hint = room.currentWord[0] + " _ ".repeat(room.currentWord.length - 1);
         io.to(roomId).emit('chat_message', { username: 'System', text: `Hint: ${hint}` });
@@ -80,13 +82,23 @@ io.on('connection', (socket) => {
     if (!room) return;
     clearInterval(room.timer);
     io.to(roomId).emit('chat_message', { username: 'System', text: `${msg} Word was: ${room.currentWord}` });
-    room.round++;
-    setTimeout(() => { if(rooms[roomId]) prepareNewRound(roomId); }, 3000);
+    
+    // --- NAYA LOGIC: GAME OVER CHECK --- [cite: 20, 61]
+    const totalTurns = room.players.length * 2; // Har player 2 baar draw karega
+
+    if (room.round >= totalTurns) {
+      // Game Khatam - Leaderboard Bhejo
+      const sortedPlayers = [...room.players].sort((a, b) => b.score - a.score);
+      io.to(roomId).emit('game_over', { winner: sortedPlayers[0], leaderboard: sortedPlayers });
+      room.isStarted = false; // Wapas lobby start karne ke liye
+    } else {
+      room.round++;
+      setTimeout(() => { if(rooms[roomId]) prepareNewRound(roomId); }, 3000);
+    }
   }
 
   socket.on('draw_data', (data) => socket.to(data.roomId).emit('draw_data', data));
   socket.on('clear_canvas', (roomId) => socket.to(roomId).emit('clear_canvas'));
-  socket.on('draw_undo', (roomId) => socket.to(roomId).emit('draw_undo'));
 
   socket.on('chat_message', (data) => {
     const room = rooms[data.roomId];
