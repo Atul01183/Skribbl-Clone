@@ -1,119 +1,148 @@
+// src/components/Board.jsx
 import { useEffect, useRef, useState } from 'react';
 
 const Board = ({ socket, roomId, isDrawer }) => {
   const canvasRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [color, setColor] = useState('black');
-  const [paths, setPaths] = useState([]); 
-  const currentPath = useRef([]);
+  const [brushSize, setBrushSize] = useState(5);
+  const prevPos = useRef({ x: 0, y: 0 });
+
+  // 1. Skribbl Colors (White is for Eraser)
+  const colors = ['black', 'red', 'blue', 'green', 'yellow', 'orange', 'purple', 'brown', 'pink', 'white'];
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    canvas.width = 600; 
-    canvas.height = 400;
-    ctx.lineCap = 'round'; 
-    ctx.lineWidth = 5;
+    const context = canvas.getContext('2d');
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
 
-    // FIX YAHAN HAI: data.x1, data.y1 use karna hai (prevX, prevY nahi)
-    socket.on('draw_data', (data) => {
-      drawOnCanvas(ctx, data.x1, data.y1, data.x2, data.y2, data.clr);
-    });
+    // 2. Dusre players ki drawing aur color receive karna
+    const handleDrawData = (data) => {
+      const { prevX, prevY, currX, currY, drawColor, size } = data;
+      context.strokeStyle = drawColor;
+      context.lineWidth = size;
+      
+      context.beginPath();
+      context.moveTo(prevX, prevY);
+      context.lineTo(currX, currY);
+      context.stroke();
+    };
 
-    socket.on('clear_canvas', () => {
-      ctx.clearRect(0, 0, 600, 400);
-      setPaths([]);
-    });
+    // 3. Clear canvas event handle karna
+    const handleClearCanvas = () => {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+    };
 
-    socket.on('draw_undo', () => {
-      setPaths(prev => {
-        const newPaths = prev.slice(0, -1);
-        redrawAll(ctx, newPaths);
-        return newPaths;
-      });
-    });
+    socket.on('draw_data', handleDrawData);
+    socket.on('clear_canvas', handleClearCanvas);
 
-    return () => { 
-      socket.off('draw_data'); 
-      socket.off('clear_canvas'); 
-      socket.off('draw_undo'); 
+    return () => {
+      socket.off('draw_data', handleDrawData);
+      socket.off('clear_canvas', handleClearCanvas);
     };
   }, [socket]);
 
-  const drawOnCanvas = (ctx, x1, y1, x2, y2, clr) => {
-    ctx.strokeStyle = clr;
-    ctx.beginPath(); 
-    ctx.moveTo(x1, y1); 
-    ctx.lineTo(x2, y2); 
-    ctx.stroke();
-  };
-
-  const redrawAll = (ctx, allPaths) => {
-    ctx.clearRect(0, 0, 600, 400);
-    allPaths.forEach(path => {
-      path.forEach(step => drawOnCanvas(ctx, step.x1, step.y1, step.x2, step.y2, step.clr));
-    });
-  };
-
-  const startDraw = (e) => {
-    if (!isDrawer) return;
+  const startDrawing = ({ nativeEvent }) => {
+    if (!isDrawer) return; // Agar drawer nahi ho toh draw nahi kar sakte
+    
+    const { offsetX, offsetY } = nativeEvent;
     setIsDrawing(true);
-    currentPath.current = [];
-    const { offsetX, offsetY } = e.nativeEvent;
-    currentPath.current.push({ x: offsetX, y: offsetY });
+    prevPos.current = { x: offsetX, y: offsetY };
   };
 
-  const draw = (e) => {
+  const draw = ({ nativeEvent }) => {
     if (!isDrawing || !isDrawer) return;
-    const { offsetX, offsetY } = e.nativeEvent;
-    const ctx = canvasRef.current.getContext('2d');
-    const lastPos = currentPath.current[currentPath.current.length - 1];
+    
+    const { offsetX, offsetY } = nativeEvent;
+    const context = canvasRef.current.getContext('2d');
+    
+    // Apni drawing apply karna
+    context.strokeStyle = color;
+    context.lineWidth = brushSize;
+    context.beginPath();
+    context.moveTo(prevPos.current.x, prevPos.current.y);
+    context.lineTo(offsetX, offsetY);
+    context.stroke();
 
-    drawOnCanvas(ctx, lastPos.x, lastPos.y, offsetX, offsetY, color);
-    
-    const step = { x1: lastPos.x, y1: lastPos.y, x2: offsetX, y2: offsetY, clr: color };
-    // Data server ko bheja ja raha hai
-    socket.emit('draw_data', { roomId, ...step });
-    
-    currentPath.current.push({ x: offsetX, y: offsetY, step });
+    // Server ko size aur color ke sath data bhejna
+    socket.emit('draw_data', {
+      roomId: roomId,
+      prevX: prevPos.current.x,
+      prevY: prevPos.current.y,
+      currX: offsetX,
+      currY: offsetY,
+      drawColor: color, // Konsa color hai
+      size: brushSize // Pen hai ya Eraser
+    });
+
+    prevPos.current = { x: offsetX, y: offsetY };
   };
 
-  const stopDraw = () => {
-    if (isDrawing) {
-      const pathSteps = currentPath.current.filter(p => p.step).map(p => p.step);
-      setPaths(prev => [...prev, pathSteps]);
-    }
+  const stopDrawing = () => {
     setIsDrawing(false);
   };
 
+  const clearCanvas = () => {
+    if (!isDrawer) return;
+    const canvas = canvasRef.current;
+    const context = canvas.getContext('2d');
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    socket.emit('clear_canvas', roomId);
+  };
+
   return (
-    <div style={{ background: 'white', padding: '15px', borderRadius: '15px', boxShadow: '0 5px 15px rgba(0,0,0,0.3)' }}>
-      {isDrawer && (
-        <div style={{ marginBottom: '10px', display: 'flex', gap: '10px' }}>
-          <button onClick={() => setColor('black')} style={{ background: 'black', color: 'white', padding: '5px 10px', borderRadius: '5px', border: 'none', cursor: 'pointer' }}>Black</button>
-          <button onClick={() => setColor('red')} style={{ background: 'red', color: 'white', padding: '5px 10px', borderRadius: '5px', border: 'none', cursor: 'pointer' }}>Red</button>
-          <button onClick={() => setColor('blue')} style={{ background: 'blue', color: 'white', padding: '5px 10px', borderRadius: '5px', border: 'none', cursor: 'pointer' }}>Blue</button>
-          <button onClick={() => {
-            const ctx = canvasRef.current.getContext('2d');
-            const newPaths = paths.slice(0, -1);
-            setPaths(newPaths);
-            redrawAll(ctx, newPaths);
-            socket.emit('draw_undo', roomId);
-          }} style={{ background: '#555', color: 'white', padding: '5px 10px', borderRadius: '5px', border: 'none', cursor: 'pointer' }}>Undo</button>
-          <button onClick={() => {
-            canvasRef.current.getContext('2d').clearRect(0, 0, 600, 400);
-            setPaths([]);
-            socket.emit('clear_canvas', roomId);
-          }} style={{ background: '#f44336', color: 'white', padding: '5px 10px', borderRadius: '5px', border: 'none', cursor: 'pointer' }}>Clear</button>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px' }}>
+      
+      {/* TOOLBAR (Sirf Drawer ko active dikhega) */}
+      <div style={{ 
+        display: 'flex', gap: '15px', alignItems: 'center', 
+        opacity: isDrawer ? 1 : 0.4, 
+        pointerEvents: isDrawer ? 'auto' : 'none',
+        backgroundColor: 'rgba(0,0,0,0.6)', padding: '10px 20px', borderRadius: '15px'
+      }}>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {colors.map(c => (
+            <button 
+              key={c} 
+              onClick={() => { 
+                setColor(c); 
+                setBrushSize(c === 'white' ? 20 : 5); // Eraser(white) ka size bada kar diya
+              }} 
+              style={{ 
+                width: '35px', height: '35px', backgroundColor: c, 
+                border: color === c ? '3px solid #00a8ff' : '2px solid white', 
+                borderRadius: '50%', cursor: 'pointer',
+                boxShadow: c === 'white' ? 'inset 0 0 5px rgba(0,0,0,0.3)' : 'none'
+              }}
+              title={c === 'white' ? 'Eraser' : c}
+            >
+              {c === 'white' && '🧼'} {/* Eraser icon */}
+            </button>
+          ))}
         </div>
-      )}
-      <canvas 
-        ref={canvasRef} 
-        onMouseDown={startDraw} 
-        onMouseMove={draw} 
-        onMouseUp={stopDraw} 
-        onMouseOut={stopDraw}
-        style={{ border: '1px solid #ddd', background: 'white', cursor: isDrawer ? 'crosshair' : 'not-allowed', borderRadius: '10px' }} 
+
+        <button onClick={clearCanvas} style={{ padding: '8px 15px', background: '#ff4757', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
+          🗑️ Clear All
+        </button>
+      </div>
+
+      {/* CANVAS */}
+      <canvas
+        ref={canvasRef}
+        width={700}
+        height={450}
+        onMouseDown={startDrawing}
+        onMouseMove={draw}
+        onMouseUp={stopDrawing}
+        onMouseLeave={stopDrawing}
+        style={{
+          border: '4px solid #34495e',
+          backgroundColor: 'white',
+          cursor: isDrawer ? 'crosshair' : 'not-allowed',
+          borderRadius: '10px',
+          maxWidth: '100%'
+        }}
       />
     </div>
   );
