@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import Board from './components/Board';
 import Chat from './components/Chat';
 
-const socket = io('http://localhost:3001');
+const socket = io(' https://skribbl-backend-lofb.onrender.com');
 
 function App() {
   const [isJoined, setIsJoined] = useState(false);
